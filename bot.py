@@ -1,166 +1,193 @@
 import asyncio
 import os
 import subprocess
+import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import Config
-from utils import get_progress_bar, cleanup_files, get_video_duration, parse_ffmpeg_progress
+from utils import *
 
-app = Client("video_bot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN)
+app = Client("super_video_bot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN)
 
 @app.on_message(filters.command("start"))
-async def start_command(client, message):
+async def start(client, message):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Convertir Video", callback_data="menu_convert")],
+        [InlineKeyboardButton("🔥 Quemar Subtítulos", callback_data="menu_subs")],
+        [InlineKeyboardButton("📖 Ayuda", callback_data="help")]
+    ])
+    
     await message.reply(
-        "🎬 **Video Converter Bot**\n\n"
-        "📋 **Como usar:**\n"
-        "1. Envía un video o responde `/dw` a un video\n"
-        "2. Selecciona calidad\n"
-        "3. Elige preset y formato\n"
-        "4. ¡Listo! ✨",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📖 Ayuda", callback_data="help")]
-        ])
+        "🚀 **Super Video Bot** *(Conversión + Subtítulos)*\n\n"
+        "🎬 **`/dw`** - Convertir video (responde a video)\n"
+        "🔥 **`/subs`** - Quemar subtítulos (video + .srt)\n\n"
+        "**Soporta:** MP4/MKV | 240p-1080p | SRT/VTT/ASS",
+        reply_markup=kb
     )
 
+# 🎬 CONVERSIÓN VIDEO NORMAL
 @app.on_message(filters.command("dw") & filters.reply)
 async def dw_command(client, message):
-    """Comando principal: responde a video"""
     reply_msg = message.reply_to_message
     media = reply_msg.video or reply_msg.document
     
     if not media:
-        return await message.reply("❌ **Responde a un VIDEO o ARCHIVO video**")
+        return await message.reply("❌ **Responde a un VIDEO**")
     
-    # Botones de calidad
     quality_buttons = [
-        [InlineKeyboardButton(q["label"], callback_data=f"quality_{k}_{reply_msg.id}")]
+        [InlineKeyboardButton(q["label"], callback_data=f"quality_{k}_{reply_msg.id}_normal")]
+        for k, q in Config.QUALITIES.items()
+    ]
+    
+    await message.reply("🎬 **Selecciona Calidad:**", reply_markup=InlineKeyboardMarkup(quality_buttons))
+
+# 🔥 SUBTÍTULOS QUEMADOS
+@app.on_message(filters.command("subs"))
+async def subs_command(client, message):
+    if not message.reply_to_message:
+        return await message.reply("❌ **Responde a un VIDEO**")
+    
+    video_msg = message.reply_to_message
+    if not (video_msg.video or video_msg.document):
+        return await message.reply("❌ **Responde a un VIDEO**")
+    
+    # Verificar subtítulo adjunto
+    subtitle_file = None
+    if message.document:
+        ext = message.document.file_name.lower() if message.document.file_name else ""
+        if ext in ['.srt', '.vtt', '.ass', '.ssa']:
+            subtitle_file = await message.download()
+    
+    if not subtitle_file:
+        return await message.reply(
+            "❌ **Adjunta subtítulo (.srt/.vtt/.ass/.ssa)**\n\n"
+            "📝 **Ejemplo:**\n"
+            "• Video → `/subs` + archivo.srt"
+        )
+    
+    # Botones calidad para subtítulos
+    sub_buttons = [
+        [InlineKeyboardButton(f"🔥 {q['label']}", callback_data=f"subs_{k}_{video_msg.id}_{subtitle_file}")]
         for k, q in Config.QUALITIES.items()
     ]
     
     await message.reply(
-        "🎬 **Selecciona Calidad:**",
-        reply_markup=InlineKeyboardMarkup(quality_buttons)
+        f"✅ **Subtítulo:** `{os.path.basename(subtitle_file)}`\n\n"
+        "🔥 **Selecciona Calidad:**",
+        reply_markup=InlineKeyboardMarkup(sub_buttons)
     )
 
-@app.on_callback_query(filters.regex(r"^quality_(.+)_(\d+)$"))
-async def select_preset(client: Client, callback: CallbackQuery):
-    """Selecciona preset de velocidad"""
-    _, quality_key, msg_id = callback.data.split("_", 2)
+# 🎯 CALLBACKS UNIFICADOS
+@app.on_callback_query(filters.regex(r"^(quality|subs)_(.+)_(\d+)(?:_(.+))?$"))
+async def handle_selection(client: Client, callback: CallbackQuery):
+    data = callback.data.split("_")
+    action, quality_key, msg_id = data[0], data[2], int(data[3])
     
-    preset_buttons = [
-        [InlineKeyboardButton(p.upper(), callback_data=f"preset_{quality_key}_{p}_{msg_id}")]
-        for p in Config.PRESETS
-    ]
+    if action == "quality":  # 🎬 Conversión normal
+        preset_buttons = [
+            [InlineKeyboardButton(p.upper(), callback_data=f"preset_{quality_key}_{Config.PRESETS[0]}_{msg_id}_normal")]
+            for p in Config.PRESETS[:3]  # Solo presets rápidos
+        ] + [[InlineKeyboardButton("🚀 Rápido", callback_data=f"preset_{quality_key}_fast_{msg_id}_normal")]]
+        
+        await callback.message.edit(
+            f"⚡ **Preset:**\n\n**{Config.QUALITIES[quality_key]['label']}**",
+            reply_markup=InlineKeyboardMarkup(preset_buttons)
+        )
     
-    await callback.message.edit(
-        f"⚡ **Preset de Velocidad:**\n\n"
-        f"**{Config.QUALITIES[quality_key]['label']}**",
-        reply_markup=InlineKeyboardMarkup(preset_buttons)
-    )
+    elif action == "subs":  # 🔥 Subtítulos
+        subtitle_path = data[4]
+        await convert_with_subtitles(client, callback, quality_key, msg_id, subtitle_path)
 
-@app.on_callback_query(filters.regex(r"^preset_(.+)_(.+)_(\d+)$"))
+@app.on_callback_query(filters.regex(r"^preset_(.+)_(.+)_(\d+)_normal$"))
 async def select_format(client: Client, callback: CallbackQuery):
-    """Selecciona formato final"""
     _, quality_key, preset, msg_id = callback.data.split("_", 3)
     
     format_buttons = [
         [
-            InlineKeyboardButton("🎬 MP4", callback_data=f"convert_{quality_key}_{preset}_mp4_{msg_id}"),
-            InlineKeyboardButton("🎞️ MKV", callback_data=f"convert_{quality_key}_{preset}_mkv_{msg_id}")
+            InlineKeyboardButton("🎬 MP4", callback_data=f"convert_{quality_key}_{preset}_mp4_{msg_id}_normal"),
+            InlineKeyboardButton("🎞 MKV", callback_data=f"convert_{quality_key}_{preset}_mkv_{msg_id}_normal")
         ]
     ]
     
     await callback.message.edit(
-        f"📁 **Formato Final:**\n\n"
-        f"🎬 **{Config.QUALITIES[quality_key]['label']}**\n"
-        f"⚡ **Preset:** `{preset.upper()}`",
+        f"📁 **Formato:**\n\n🎬 **{Config.QUALITIES[quality_key]['label']}** | `{preset.upper()}`",
         reply_markup=InlineKeyboardMarkup(format_buttons)
     )
 
-@app.on_callback_query(filters.regex(r"^convert_(.+)_(.+)_(.+)_(\d+)$"))
-async def convert_video(client: Client, callback: CallbackQuery):
-    """Proceso principal de conversión"""
+@app.on_callback_query(filters.regex(r"^convert_(.+)_(.+)_(.+)_(\d+)_normal$"))
+async def convert_normal(client: Client, callback: CallbackQuery):
+    await convert_video(client, callback, is_subtitle=False)
+
+async def convert_video(client: Client, callback: CallbackQuery, is_subtitle: bool = False):
+    """🎬 Conversión genérica (normal o subtítulos)"""
     try:
-        _, quality_key, preset, fmt, msg_id_str = callback.data.split("_", 4)
-        msg_id = int(msg_id_str)
+        data = callback.data.split("_")
+        quality_key, preset, fmt, msg_id_str = data[1], data[2], data[3], int(data[4])
         quality = Config.QUALITIES[quality_key]
         
-        # Editar mensaje de estado
-        status_msg = await callback.message.edit("⏳ **Descargando video...**")
+        status_msg = await callback.message.edit("⏳ **Descargando...**")
+        msg = await client.get_messages(callback.message.chat.id, msg_id_str)
+        input_file = await client.download_media(msg)
         
-        # Obtener mensaje original
-        original_msg = await client.get_messages(callback.message.chat.id, msg_id)
-        input_file = await client.download_media(original_msg)
+        if not input_file:
+            return await status_msg.edit("❌ **Error descarga**")
         
-        if not input_file or not os.path.exists(input_file):
-            return await status_msg.edit("❌ **Error al descargar archivo**")
-        
-        output_file = f"converted_{int(time.time())}.{fmt}"
-        
-        # Obtener duración para progreso
+        output_file = f"out_{int(time.time())}.{fmt}"
         total_duration = get_video_duration(input_file)
         
-        # Comando FFmpeg optimizado
+        # 🎬 Comando base
         cmd = [
             "ffmpeg", "-i", input_file,
             "-vf", f"scale={quality['res']}:flags=lanczos",
-            "-c:v", "libx264",
-            "-preset", preset,
+            "-c:v", "libx264", "-preset", preset,
             "-b:v", quality['bitrate'],
-            "-maxrate", f"{float(quality['bitrate'].replace('k','')) * 1.2}k",
-            "-bufsize", f"{float(quality['bitrate'].replace('k','')) * 2}k",
             "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",
-            "-y", output_file
+            "-movflags", "+faststart", "-y", output_file
         ]
         
-        # Ejecutar FFmpeg con progreso
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True, bufsize=1
-        )
+        # 🔥 Si es subtítulos, agregar filtro
+        if is_subtitle:
+            subtitle_path = data[5]  # Desde callback data
+            subtitle_filter = build_subtitle_filter(subtitle_path)
+            cmd[2] = f"scale={quality['res']}:flags=lanczos,{subtitle_filter}"
+        
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
         
         last_update = 0
         while process.poll() is None:
             line = process.stdout.readline()
             if line:
                 current_time = parse_ffmpeg_progress(line)
-                if total_duration > 0:
-                    percentage = min(100, int((current_time / total_duration) * 100))
-                    
-                    if time.time() - last_update > 3:  # Actualizar cada 3s
-                        bar = get_progress_bar(percentage)
-                        await status_msg.edit(
-                            f"⚙️ **Convirtiendo {quality['label']}**\n\n"
-                            f"{bar} `{percentage}%`\n\n"
-                            f"⚡ Preset: `{preset.upper()}`"
-                        )
-                        last_update = time.time()
+                percentage = min(100, int((current_time / total_duration) * 100))
+                
+                if time.time() - last_update > 2.5:
+                    bar = get_progress_bar(percentage)
+                    mode = "🔥 Subtítulos" if is_subtitle else f"⚙️ {Config.QUALITIES[quality_key]['label']}"
+                    await status_msg.edit(f"{mode}\n\n{bar} `{percentage}%` | `{preset.upper()}`")
+                    last_update = time.time()
         
         process.wait()
         
-        # Verificar archivo de salida
-        if not os.path.exists(output_file) or os.path.getsize(output_file) < 1024:
-            raise Exception("FFmpeg falló")
-        
-        # Subir video convertido
-        await status_msg.edit("📤 **Subiendo video convertido...**")
-        
-        await client.send_video(
-            callback.message.chat.id,
-            output_file,
-            caption=f"✅ **¡Conversión Exitosa!**\n\n"
-                   f"📺 **{quality['label']}**\n"
-                   f"⚡ **Preset:** `{preset.upper()}`\n"
-                   f"📁 **{fmt.upper()}`",
-            reply_to_message_id=msg_id
-        )
-        
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 1024:
+            await status_msg.edit("📤 **Subiendo...**")
+            
+            caption = f"✅ **Listo!**\n\n"
+            if is_subtitle:
+                caption += f"🔥 **{quality['label']}** + Subtítulos\n📄 `{os.path.basename(subtitle_path)}`"
+            else:
+                caption += f"🎬 **{quality['label']}** | `{preset.upper()}` | **{fmt.upper()}**"
+            
+            await client.send_video(
+                callback.message.chat.id, output_file, caption=caption,
+                reply_to_message_id=msg_id_str
+            )
+        else:
+            raise Exception("FFmpeg error")
+            
     except Exception as e:
         await callback.message.edit(f"❌ **Error:** `{str(e)[:100]}`")
     
     finally:
-        # Limpieza automática
         cleanup_files(input_file, output_file)
         try:
             await callback.message.delete()
@@ -170,12 +197,14 @@ async def convert_video(client: Client, callback: CallbackQuery):
 @app.on_callback_query(filters.regex(r"^help$"))
 async def help_callback(client, callback):
     await callback.answer(
-        "📋 Responde `/dw` a cualquier video!\n"
-        "Selecciona calidad → preset → formato ✨",
+        "**Comandos:**\n"
+        "• `/dw` + video = Convertir\n"
+        "• `/subs` + video + .srt = Subtítulos\n\n"
+        "**Formatos:** SRT/VTT/ASS/MP4/MKV",
         show_alert=True
     )
 
 if __name__ == "__main__":
-    print("🚀 Video Converter Bot iniciado!")
-    print("📱 Comando: /dw (responder a video)")
+    print("🚀 **Super Video Bot** iniciado!")
+    print("🎬 /dw - Convertir | 🔥 /subs - Subtítulos")
     app.run()
