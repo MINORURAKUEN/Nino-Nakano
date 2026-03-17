@@ -1,10 +1,27 @@
- Nino Nakano Bot 🦋
-Nino Nakano es un bot de Telegram diseñado para gestionar archivos multimedia con eficiencia, permitiendo comprimir videos y quemar subtítulos directamente desde tu dispositivo móvil.
-✨ Características Principales
-Compresión Multicanal: Soporta calidades desde 240p hasta 1080p con bitrates optimizados.
-Gestión de Subtítulos: Capacidad para quemar (hardsub) o incluir pistas (softsub) en idiomas como español e inglés.
-Barra de Progreso Real: Visualización dinámica del proceso en Telegram mediante ■■■▢▢.
-Presets de FFmpeg: Selección de velocidad (ultrafast, fast, medium, etc.) para equilibrar tiempo y calidad.
-Análisis Completo: Comando .dw para ver metadatos detallados del video antes de procesar.
-🛠️ Requisitos en Termux
-Para ejecutar este bot en tu smartphone, asegúrate de tener instalados los siguientes paquetes:
+# Telegram Video Compressor & Subtitle Burner Bot 🎬
+
+Este bot permite comprimir videos y quemar subtítulos (.srt) de forma automática usando Python y FFmpeg.
+
+## 🚀 Requisitos
+* Python 3.9+
+* FFmpeg instalado en el sistema
+* Un Token de Telegram (vía @BotFather)
+
+## 🛠️ Instalación
+
+1. Clona el repositorio:
+   ```bash
+   git clone [https://github.com/tu-usuario/tu-repo.git](https://github.com/tu-usuario/tu-repo.git)
+   cd tu-repo
+
+
+   pip install -r requirements.txt
+
+   python bot.py
+
+   📦 Tecnologías
+python-telegram-bot
+FFmpeg
+python-dotenv
+
+**¿Quieres que te ayude a generar el archivo `requirements.txt` para que otros puedan instalar las librerías fácilmente?**
