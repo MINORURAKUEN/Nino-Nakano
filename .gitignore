@@ -1,7 +1,0 @@
-*.session
-*.session-journal
-downloads/
-out_*.mp4
-temp_*
-__pycache__/
-
